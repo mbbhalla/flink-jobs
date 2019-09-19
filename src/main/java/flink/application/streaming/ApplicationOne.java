@@ -2,27 +2,28 @@ package flink.application.streaming;
 
 import java.time.Instant;
 import java.util.Date;
+import java.util.Properties;
 import java.util.stream.StreamSupport;
 
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.connectors.twitter.TwitterSource;
 import org.apache.flink.util.Collector;
 
-import com.amazonaws.services.kinesisanalytics.runtime.KinesisAnalyticsRuntime;
-
 import lombok.Builder;
 import lombok.Getter;
-import lombok.val;
+import lombok.extern.slf4j.Slf4j;
 
 /*
  * Keys tweets by language and finds tweet count in 1 minute window (based on ingestion time)
  */
+@Slf4j
 public class ApplicationOne {
 
     @Builder
@@ -41,10 +42,17 @@ public class ApplicationOne {
         env.setParallelism(1);
         //env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
         
-        val props = KinesisAnalyticsRuntime.getApplicationProperties()
-            .get("configuration");
+        //val props = KinesisAnalyticsRuntime.getApplicationProperties()
+        //    .get("configuration");
         
-        val dataStream = env.addSource(new TwitterSource(props))
+        Properties props = new Properties();
+        props.setProperty(TwitterSource.CONSUMER_KEY, "******************");
+        props.setProperty(TwitterSource.CONSUMER_SECRET, "*********************");
+        props.setProperty(TwitterSource.TOKEN, "*******************");
+        props.setProperty(TwitterSource.TOKEN_SECRET, "*****************");
+         
+        
+        env.addSource(new TwitterSource(props))
             .filter(tweetJsonString -> tweetJsonString.contains("\"created_at\""))
             .map(tweetJsonString -> { 
                 JsonNode jsonNode = mapper.readTree(tweetJsonString);
@@ -54,7 +62,7 @@ public class ApplicationOne {
                     .build();
             })
             .keyBy(tweetObject -> tweetObject.getLang())
-            .timeWindow(Time.seconds(2))
+            .timeWindow(Time.minutes(1l))
             .apply(new WindowFunction<Tweet, Tuple3<String, Long, Date>, String, TimeWindow>() {
                 @Override
                 public void apply(String lang, 
@@ -68,9 +76,13 @@ public class ApplicationOne {
                         Date.from(Instant.ofEpochMilli(window.getEnd()))
                     ));
                 }
-            });
-        
-        dataStream.print();
+            })
+            .addSink(new SinkFunction<Tuple3<String, Long, Date>>() {
+                @SuppressWarnings("rawtypes")
+                public void invoke(Tuple3<String, Long, Date> value, Context context) throws Exception {
+                    log.info("Blah: {}", value);
+                }
+            });            
         
         env.execute("Twitter keyBy Lang window count");
     }
